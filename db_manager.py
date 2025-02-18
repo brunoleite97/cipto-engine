@@ -216,6 +216,17 @@ class GerenciadorDeBancoDeDados:
             logger.error(f"Erro ao obter preços: {str(e)}")
             raise
 
+    def obter_preços_passados(self, symbol: str, intervalo: str = '1d', periodo: str = '1 week ago UTC') -> pd.DataFrame:
+        """Obter dados de preços passados do banco de dados"""
+        try:
+            query = f"SELECT * FROM preços WHERE symbol = ? AND timestamp >= ?"
+            logger.info(f"Executando consulta SQL: {query}")
+            df_preços = pd.read_sql_query(query, self.con, params=(symbol, periodo))
+            return df_preços
+        except Exception as e:
+            logger.error(f"Erro ao obter preços passados: {str(e)}")
+            raise
+
     def contar_registros(self, tabela: str) -> int:
         """Contar o número de registros em uma tabela específica"""
         try:

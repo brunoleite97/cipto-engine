@@ -31,9 +31,10 @@ def get_portfolio():
 
 @app.route('/api/dividir_carteira', methods=['GET'])
 def dividir_carteira():
-    """Dividir o valor em carteira entre as moedas especificadas"""
+    """Dividir o valor em carteira entre as moedas especificadas e manter um percentual em USDT"""
     try:
-        divisão = bot.dividir_valor_em_carteira(symbols)
+        percentual_usdt = float(request.args.get('percentual_usdt', 0.1))
+        divisão = bot.dividir_valor_em_carteira(symbols, percentual_usdt)
         return jsonify(divisão)
     except Exception as e:
         logger.error(f"Erro ao dividir carteira: {str(e)}")

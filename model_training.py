@@ -4,10 +4,10 @@ from sklearn.preprocessing import StandardScaler
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import numpy as np
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 from db_manager import GerenciadorDeBancoDeDados
 
 # Configuração aprimorada de logging
@@ -21,6 +21,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super(NeuralNetwork, self).__init__()
+        self.flatten = nn.Flatten()
+        self.linear_relu_stack = nn.Sequential(
+            nn.Linear(15, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(64, 32),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(32, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.flatten(x)
+        logits = self.linear_relu_stack(x)
+        return logits
+
 class ModeloDeAprendizadoDeMáquina:
     def __init__(self, db: GerenciadorDeBancoDeDados):
         self.db = db
@@ -30,11 +56,7 @@ class ModeloDeAprendizadoDeMáquina:
 
     def _criar_modelo_neural(self):
         """Criar um modelo de rede neural"""
-        model = Sequential()
-        model.add(Dense(64, input_dim=15, activation='relu'))
-        model.add(Dense(32, activation='relu'))
-        model.add(Dense(1, activation='sigmoid'))
-        model.compile(optimizer=Adam(learning_rate=0.001), loss='binary_crossentropy', metrics=['accuracy'])
+        model = NeuralNetwork()
         return model
 
     def treinar_modelo(self):
@@ -64,7 +86,6 @@ class ModeloDeAprendizadoDeMáquina:
             df_preços = self.db.obter_preços()
             
             # Unir dados de métricas com notícias
-            # Agrupar notícias por timestamp e symbol e calcular a média do sentimento
             df_notícias_agrupadas = df_notícias.groupby(['timestamp', 'symbol'])['sentiment'].mean().reset_index()
             df_métricas_com_notícias = pd.merge(df_métricas, df_notícias_agrupadas, on=['timestamp', 'symbol'], how='left', suffixes=('', '_notícias'))
             
@@ -82,46 +103,31 @@ class ModeloDeAprendizadoDeMáquina:
             # Se a tabela de negociações estiver vazia, criar um DataFrame sintético
             if len(df_negociações) == 0:
                 logger.warning("A tabela de negociações está vazia. Criando um DataFrame sintético.")
-                # Criar um DataFrame sintético com base nas métricas, notícias e preços
                 df_sintético = pd.merge(df_preços, df_métricas_com_notícias, on=['timestamp', 'symbol'], how='left')
-                
-                # Preencher valores ausentes com 0
                 df_sintético = df_sintético.fillna(0)
-                
-                # Adicionar colunas necessárias para o treinamento
-                df_sintético['side'] = 'buy'  # Exemplo de valor padrão
-                df_sintético['quantity'] = 1.0  # Exemplo de valor padrão
-                df_sintético['price'] = df_sintético['close']  # Usar o preço de fechamento como exemplo
+                df_sintético['side'] = 'buy'
+                df_sintético['quantity'] = 1.0
+                df_sintético['price'] = df_sintético['close']
                 df_sintético['total_value'] = df_sintético['quantity'] * df_sintético['price']
-                df_sintético['ai_confidence'] = 0.5  # Exemplo de valor padrão
-                df_sintético['news_sentiment'] = df_sintético['sentiment']  # Usar o sentimento das notícias como exemplo
-                df_sintético['status'] = 'open'  # Exemplo de valor padrão
-                
-                # Calcular o profit sintético
+                df_sintético['ai_confidence'] = 0.5
+                df_sintético['news_sentiment'] = df_sintético['sentiment']
+                df_sintético['status'] = 'open'
                 df_sintético['profit'] = df_sintético['total_value'] - (df_sintético['quantity'] * df_sintético['price'])
                 df_sintético['profit'] = df_sintético['profit'].apply(lambda x: 1 if x > 0 else 0)
-                
-                # Renomear colunas para corresponder às colunas de negociações
                 df_sintético.rename(columns={'sentiment': 'sentiment_notícias'}, inplace=True)
                 
-                # Adicionar colunas faltantes com valores padrão
                 colunas_necessárias = ['technical_score', 'news_sentiment', 'ai_confidence', 'sma_20', 'sma_50', 'ema_20', 'rsi', 'macd', 'macd_signal', 'macd_diff', 'bb_upper', 'bb_middle', 'bb_lower', 'volume_sma', 'sentiment_notícias', 'profit']
                 for coluna in colunas_necessárias:
                     if coluna not in df_sintético.columns:
-                        df_sintético[coluna] = 0  # Adicionar coluna com valor padrão 0
+                        df_sintético[coluna] = 0
                 
-                # Garantir que o DataFrame sintético tenha uma distribuição de classes adequada
                 if len(df_sintético['profit'].unique()) == 1:
                     logger.warning("O DataFrame sintético contém apenas uma classe para o target. Criando uma distribuição de classes sintética.")
-                    # Criar uma distribuição de classes sintética
                     num_registros = len(df_sintético)
                     num_positivos = num_registros // 2
                     num_negativos = num_registros - num_positivos
-                    
-                    # Selecionar aleatoriamente registros para serem positivos e negativos
                     indices_positivos = np.random.choice(df_sintético.index, num_positivos, replace=False)
                     indices_negativos = np.setdiff1d(df_sintético.index, indices_positivos)
-                    
                     df_sintético.loc[indices_positivos, 'profit'] = 1
                     df_sintético.loc[indices_negativos, 'profit'] = 0
                 
@@ -129,8 +135,6 @@ class ModeloDeAprendizadoDeMáquina:
             else:
                 # Unir dados de negociações com métricas e notícias
                 df_negociações = pd.merge(df_negociações, df_métricas_com_notícias, on=['timestamp', 'symbol'], how='left')
-                
-                # Preencher valores ausentes com 0
                 df_negociações = df_negociações.fillna(0)
                 
                 # Log para verificar o conteúdo do DataFrame após a união
@@ -148,38 +152,60 @@ class ModeloDeAprendizadoDeMáquina:
             # Normalizar features
             features = self.scaler.fit_transform(features)
             
-            # Dividir dados em treino e teste
+            # Converter para tensores PyTorch
             X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, random_state=42)
+            X_train = torch.tensor(X_train, dtype=torch.float32)
+            X_test = torch.tensor(X_test, dtype=torch.float32)
+            y_train = torch.tensor(y_train.values, dtype=torch.float32).view(-1, 1)
+            y_test = torch.tensor(y_test.values, dtype=torch.float32).view(-1, 1)
+            
+            # Criar DataLoader
+            train_dataset = TensorDataset(X_train, y_train)
+            test_dataset = TensorDataset(X_test, y_test)
+            train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+            test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
             
             # Treinar modelo
-            early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
-            self.model.fit(X_train, y_train, epochs=100, batch_size=32, validation_split=0.2, callbacks=[early_stopping])
+            optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+            criterion = nn.BCELoss()
+            
+            for epoch in range(100):  # Número fixo de épocas
+                self.model.train()
+                train_loss = 0.0
+                for inputs, labels in train_loader:
+                    optimizer.zero_grad()
+                    outputs = self.model(inputs)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                    optimizer.step()
+                    train_loss += loss.item()
+                
+                self.model.eval()
+                val_loss = 0.0
+                with torch.no_grad():
+                    for inputs, labels in test_loader:
+                        outputs = self.model(inputs)
+                        loss = criterion(outputs, labels)
+                        val_loss += loss.item()
+                
+                train_loss /= len(train_loader)
+                val_loss /= len(test_loader)
+                
+                logger.info(f"Epoch {epoch+1}, Train Loss: {train_loss}, Val Loss: {val_loss}")
             
             # Avaliar modelo
-            loss, accuracy = self.model.evaluate(X_test, y_test)
-            logger.info(f"Modelo treinado com sucesso. Acurácia: {accuracy}")
-            
-            # Validar modelo com cross-validation
-            # Note: Keras não suporta diretamente cross_val_score, então precisamos implementar manualmente
-            cv_scores = []
-            kf = KFold(n_splits=5, shuffle=True, random_state=42)
-            for train_index, test_index in kf.split(features):
-                X_train_cv, X_test_cv = features[train_index], features[test_index]
-                y_train_cv, y_test_cv = target[train_index], target[test_index]
-                
-                # Resetar o modelo para cada fold
-                self.model = self._criar_modelo_neural()
-                
-                self.model.fit(X_train_cv, y_train_cv, epochs=100, batch_size=32, validation_split=0.2, callbacks=[early_stopping], verbose=0)
-                loss, accuracy_cv = self.model.evaluate(X_test_cv, y_test_cv, verbose=0)
-                cv_scores.append(accuracy_cv)
-            
-            logger.info(f"Cross-validation scores: {cv_scores}, Média: {np.mean(cv_scores)}")
+            self.model.eval()
+            with torch.no_grad():
+                outputs = self.model(X_test)
+                loss = criterion(outputs, y_test)
+                accuracy = ((outputs > 0.5).int() == y_test.int()).float().mean().item()
+                logger.info(f"Modelo treinado com sucesso. Acurácia: {accuracy}")
             
             # Salvar o modelo e o scaler
-            self.model.save('model.h5')
+            torch.save(self.model.state_dict(), 'model.pt')
             np.save('scaler_mean.npy', self.scaler.mean_)
             np.save('scaler_scale.npy', self.scaler.scale_)
+        
         except Exception as e:
             logger.error(f"Erro ao treinar modelo: {str(e)}")
             raise

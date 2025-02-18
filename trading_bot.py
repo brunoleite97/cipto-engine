@@ -4,7 +4,9 @@ from sklearn.preprocessing import StandardScaler
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import numpy as np
-from tensorflow.keras.models import load_model
+from model_training import NeuralNetwork
+import torch
+import torch.nn as nn
 from db_manager import GerenciadorDeBancoDeDados
 from binance.client import Client
 from technical_analysis import analisar_indicadores_técnicos
@@ -31,7 +33,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Lista de símbolos de criptomoedas para análise
-symbols = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'BNBUSDT', 'DOGEUSDT', 'ANIMEUSDT', 'TRUMPUSDT', 'MEMEUSDT', 'SHIBUSDT', 'SOLUSDT', 'EURIUSDT', 'VANAUSDT', 'STPTUSDT', 'SXPUSDT', 'COSUSDT', 'CATIUSDT', 'SLFUSDT', 'ACHUSDT']
+symbols = [
+    'BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'BNBUSDT', 'DOGEUSDT', 'ANIMEUSDT', 
+    'TRUMPUSDT', 'MEMEUSDT', 'SHIBUSDT', 'SOLUSDT', 'EURIUSDT', 'VANAUSDT', 
+    'STPTUSDT', 'SXPUSDT', 'COSUSDT', 'CATIUSDT', 'SLFUSDT', 'ACHUSDT',
+    'DOTUSDT', 'LTCUSDT', 'AVAXUSDT', 'LINKUSDT', 'XLMUSDT', 
+    'ATOMUSDT', 'AAVEUSDT', 'ALGOUSDT', 'VETUSDT', 'XTZUSDT',
+    'UNIUSDT', 'FILUSDT', 'TRXUSDT', 'HBARUSDT', 'FTMUSDT', 'SANDUSDT', 
+    'MANAUSDT', 'ICPUSDT', 'ZECUSDT', 'DASHUSDT', 'EOSUSDT', 'MKRUSDT', 
+    'NEOUSDT', 'BCHUSDT'
+]
 
 class ModeloDeAprendizadoDeMáquina:
     def __init__(self, db: GerenciadorDeBancoDeDados):
@@ -43,17 +54,19 @@ class ModeloDeAprendizadoDeMáquina:
             raise Exception("Não foi possível carregar o modelo ou o scaler.")
 
     def _carregar_modelo(self):
-        """Carregar o modelo de rede neural a partir de um arquivo H5"""
-        if os.path.exists('model.h5'):
+        """Carregar o modelo de rede neural a partir de um arquivo PT"""
+        if os.path.exists('model.pt'):
             try:
-                model = load_model('model.h5')
+                model = NeuralNetwork()  # Criar uma instância do modelo
+                model.load_state_dict(torch.load('model.pt'))  # Carregar os parâmetros
+                model.eval()  # Colocar o modelo no modo de avaliação
                 logger.info("Modelo carregado com sucesso.")
                 return model
             except Exception as e:
                 logger.error(f"Erro ao carregar modelo: {str(e)}")
                 return None
         else:
-            logger.error("Arquivo model.h5 não encontrado.")
+            logger.error("Arquivo model.pt não encontrado.")
             return None
 
     def _carregar_scaler(self):
@@ -101,7 +114,9 @@ class ModeloDeAprendizadoDeMáquina:
                 'sentiment_notícias': [sentiment_notícias]
             })
             features = self.scaler.transform(features)
-            resultado = (self.model.predict(features) > 0.5).astype("int32")[0][0]
+            features = torch.tensor(features, dtype=torch.float32)
+            with torch.no_grad():
+                resultado = (self.model(features) > 0.5).int().item()
             return resultado
         except Exception as e:
             logger.error(f"Erro ao prever resultado: {str(e)}")
@@ -154,10 +169,12 @@ class TradingBot:
                     análise_técnica_futuro = executor.submit(analisar_indicadores_técnicos, symbol)
                     notícias_futuro = executor.submit(self.analisador_de_notícias.obter_notícias_crypto, symbol)
                     dados_de_mercado_futuro = executor.submit(self._obter_dados_de_mercado, symbol)
+                    dados_de_mercado_passados_futuro = executor.submit(self._obter_dados_de_mercado_passados, symbol)
 
                 dados_técnicos = análise_técnica_futuro.result()
                 notícias = notícias_futuro.result()
                 dados_de_mercado = dados_de_mercado_futuro.result()
+                dados_de_mercado_passados = dados_de_mercado_passados_futuro.result()
 
                 # Verificar se os dados técnicos estão vazios
                 if not dados_técnicos:
@@ -170,13 +187,14 @@ class TradingBot:
                     notícias = []
 
                 # Calcular confiança da negociação
-                confiança = self._calcular_confiança_da_negociação(dados_técnicos, notícias, dados_de_mercado)
+                confiança = self._calcular_confiança_da_negociação(dados_técnicos, notícias, dados_de_mercado, dados_de_mercado_passados)
                 
                 # Combinar todas as análises
                 análise = {
                     'técnica': dados_técnicos,
                     'notícias': notícias,
                     'mercado': dados_de_mercado,
+                    'mercado_passado': dados_de_mercado_passados,
                     'confiança': confiança,
                     'timestamp': datetime.now()
                 }
@@ -192,14 +210,17 @@ class TradingBot:
             logger.error(f"Erro na análise do mercado: {str(e)}")
             return {}
 
-    def dividir_valor_em_carteira(self, symbols: List[str]) -> Dict:
-        """Dividir o valor em carteira entre as moedas especificadas"""
+    def dividir_valor_em_carteira(self, symbols: List[str], percentual_usdt: float = 0.1) -> Dict:
+        """Dividir o valor em carteira entre as moedas especificadas e manter um percentual em USDT"""
         try:
             conta = self.client.get_account()
             saldo_usdt = float(next(filter(lambda x: x['asset'] == 'USDT', conta['balances']))['free'])
             
-            # Dividir o saldo USDT igualmente entre as moedas
-            valor_por_moeda = saldo_usdt / len(symbols)
+            # Calcular o valor a ser investido em criptomoedas
+            valor_investimento = saldo_usdt * (1 - percentual_usdt)
+            
+            # Dividir o valor investido igualmente entre as moedas
+            valor_por_moeda = valor_investimento / len(symbols)
             
             return {symbol: valor_por_moeda for symbol in symbols}
         except Exception as e:
@@ -241,7 +262,29 @@ class TradingBot:
             logger.error(f"Erro ao buscar dados de mercado: {str(e)}")
             return {}
 
-    def _calcular_confiança_da_negociação(self, dados_técnicos: Dict, notícias: List[Dict], dados_de_mercado: Dict) -> Dict:
+    def _obter_dados_de_mercado_passados(self, symbol: str) -> List[Dict]:
+        """Obter dados de mercado passados"""
+        try:
+            # Exemplo de obtenção de dados de mercado passados
+            # Aqui você pode adicionar a lógica para obter dados históricos
+            klines = self.client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1DAY, "1 week ago UTC")
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_asset_volume', 'number_of_trades',
+                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+            ])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df['open'] = df['open'].astype(float)
+            df['high'] = df['high'].astype(float)
+            df['low'] = df['low'].astype(float)
+            df['close'] = df['close'].astype(float)
+            df['volume'] = df['volume'].astype(float)
+            return df.to_dict(orient='records')
+        except Exception as e:
+            logger.error(f"Erro ao buscar dados de mercado passados: {str(e)}")
+            return {}
+
+    def _calcular_confiança_da_negociação(self, dados_técnicos: Dict, notícias: List[Dict], dados_de_mercado: Dict, dados_de_mercado_passados: List[Dict]) -> Dict:
         """Calcular confiança da negociação com base na análise técnica e de notícias"""
         try:
             # Calcular pontuação técnica
@@ -395,6 +438,7 @@ class TradingBot:
             dados_técnicos = análise['técnica']
             notícias = análise['notícias']
             dados_de_mercado = análise['mercado']
+            dados_de_mercado_passados = análise['mercado_passado']
             confiança = análise['confiança']
             timestamp = análise['timestamp']
             
@@ -536,7 +580,7 @@ class TradingBot:
                 try:
                     análise = self.analisar_mercado(symbol)
                     if análise:
-                        confiança = self._calcular_confiança_da_negociação(análise['técnica'], análise['notícias'], análise['mercado'])
+                        confiança = self._calcular_confiança_da_negociação(análise['técnica'], análise['notícias'], análise['mercado'], análise['mercado_passado'])
                         if confiança['score'] > 0.7:
                             posição = self._calcular_tamanho_da_posição(
                                 symbol,
@@ -591,7 +635,7 @@ class TradingBot:
                             logger.info(f"Análise armazenada com sucesso para {symbol}")
                     except Exception as e:
                         logger.error(f"Erro ao analisar e armazenar dados para {symbol}: {str(e)}")
-                time.sleep(15)  # Aguardar 15 segundos antes da próxima análise
+                time.sleep(3)
         except Exception as e:
             logger.error(f"Erro na coleta de dados: {str(e)}")
             raise
