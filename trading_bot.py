@@ -49,9 +49,10 @@ class ModeloDeAprendizadoDeMáquina:
         self.db = db
         self.model = self._carregar_modelo()
         self.scaler = self._carregar_scaler()
-        if self.scaler is None or self.model is None:
-            logger.error("Não foi possível carregar o modelo ou o scaler. O bot não pode iniciar.")
-            raise Exception("Não foi possível carregar o modelo ou o scaler.")
+        self.modelo_treinado = self.model is not None and self.scaler is not None
+        if not self.modelo_treinado:
+            logger.warning("Modelo ou scaler não encontrados. Inicializando em modo limitado.")
+            # Continuando sem o modelo, permitindo que o serviço inicie para treinamento
 
     def _carregar_modelo(self):
         """Carregar o modelo de rede neural a partir de um arquivo PT"""
@@ -96,6 +97,11 @@ class ModeloDeAprendizadoDeMáquina:
     def prever_resultado(self, technical_score: float, news_sentiment: float, ai_confidence: float, sma_20: float, sma_50: float, ema_20: float, rsi: float, macd: float, macd_signal: float, macd_diff: float, bb_upper: float, bb_middle: float, bb_lower: float, volume_sma: float, sentiment_notícias: float) -> int:
         """Prever resultado de uma recomendação de negociação"""
         try:
+            # Se o modelo não estiver treinado, retornar um valor neutro
+            if not self.modelo_treinado:
+                logger.warning("Modelo não treinado. Impossível fazer previsão.")
+                return 0
+                
             features = pd.DataFrame({
                 'technical_score': [technical_score],
                 'news_sentiment': [news_sentiment],
