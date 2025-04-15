@@ -7,3 +7,4 @@ numpy
 ta
 requests
 python-dotenv
+python-binance
