@@ -5,6 +5,8 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 import os
 from dotenv import load_dotenv
+import asyncio
+import threading
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -23,6 +25,15 @@ logger = logging.getLogger(__name__)
 def analisar_indicadores_técnicos(symbol: str) -> Dict:
     """Analisar indicadores técnicos para um símbolo específico"""
     try:
+        # Verificar se estamos em uma thread e configurar um event loop se necessário
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            # Se não houver event loop na thread atual, criar um novo
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            logger.info(f"Novo event loop criado para a thread {threading.current_thread().name}")
+            
         client = Client(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_API_SECRET'))
         klines = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1DAY, "1 week ago UTC")
         df = pd.DataFrame(klines, columns=[
