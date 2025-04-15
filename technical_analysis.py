@@ -11,6 +11,9 @@ import threading
 # Carregar variáveis de ambiente
 load_dotenv()
 
+# Variável global para controlar se o treinamento está em andamento
+treinamento_em_andamento = False
+
 # Configuração aprimorada de logging
 logging.basicConfig(
     level=logging.INFO,
@@ -25,6 +28,12 @@ logger = logging.getLogger(__name__)
 def analisar_indicadores_técnicos(symbol: str) -> Dict:
     """Analisar indicadores técnicos para um símbolo específico"""
     try:
+        # Verificar se o treinamento está em andamento
+        global treinamento_em_andamento
+        if treinamento_em_andamento:
+            logger.info(f"Análise de indicadores técnicos para {symbol} pausada durante o treinamento do modelo")
+            return {}
+            
         # Verificar se estamos em uma thread e configurar um event loop se necessário
         try:
             asyncio.get_event_loop()

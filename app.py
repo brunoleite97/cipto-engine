@@ -103,9 +103,25 @@ def parar_trading():
 def iniciar_treinamento():
     """Iniciar o treinamento do modelo de IA"""
     try:
+        # Importar a variável global de controle de treinamento
+        from technical_analysis import treinamento_em_andamento
+        
+        # Definir a variável global para indicar que o treinamento está em andamento
+        import technical_analysis
+        technical_analysis.treinamento_em_andamento = True
+        logger.info("Análise de mercado pausada para treinamento do modelo")
+        
         # Iniciar o treinamento em uma thread separada
-        threading.Thread(target=lambda: os.system("python train_model.py"), daemon=True).start()
-        return jsonify({"message": "Treinamento do modelo iniciado com sucesso"}), 200
+        def executar_treinamento():
+            try:
+                os.system("python train_model.py")
+            finally:
+                # Restaurar a variável global quando o treinamento terminar
+                technical_analysis.treinamento_em_andamento = False
+                logger.info("Treinamento concluído, análise de mercado restaurada")
+                
+        threading.Thread(target=executar_treinamento, daemon=True).start()
+        return jsonify({"message": "Treinamento do modelo iniciado com sucesso. Análise de mercado pausada durante o treinamento."}), 200
     except Exception as e:
         logger.error(f"Erro ao iniciar treinamento: {str(e)}")
         return jsonify({"error": str(e)}), 500
