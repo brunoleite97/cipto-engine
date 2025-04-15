@@ -1,6 +1,12 @@
 from flask import Flask, jsonify, request
 from trading_bot import bot, symbols
 import threading
+import os
+import logging
+
+# Configurar logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -92,6 +98,17 @@ def parar_trading():
     except Exception as e:
         logger.error(f"Erro ao parar trading: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/iniciar_treinamento', methods=['POST'])
+def iniciar_treinamento():
+    """Iniciar o treinamento do modelo de IA"""
+    try:
+        # Iniciar o treinamento em uma thread separada
+        threading.Thread(target=lambda: os.system("python train_model.py"), daemon=True).start()
+        return jsonify({"message": "Treinamento do modelo iniciado com sucesso"}), 200
+    except Exception as e:
+        logger.error(f"Erro ao iniciar treinamento: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     # Iniciar coleta de dados em uma thread separada
