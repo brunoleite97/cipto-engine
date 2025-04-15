@@ -33,21 +33,9 @@ wait $APP_PID\n' > /app/start.sh
 # Tornar o script executável
 RUN chmod +x /app/start.sh
 
-# Adicionar endpoint para iniciar o treinamento
-RUN echo '\
-@app.route("/api/iniciar_treinamento", methods=["POST"])\n\
-def iniciar_treinamento():\n\
-    """Iniciar o treinamento do modelo de IA"""\n\
-    try:\n\
-        # Iniciar o treinamento em uma thread separada\n\
-        threading.Thread(target=lambda: os.system("python train_model.py"), daemon=True).start()\n\
-        return jsonify({"message": "Treinamento do modelo iniciado com sucesso"}), 200\n\
-    except Exception as e:\n\
-        logger.error(f"Erro ao iniciar treinamento: {str(e)}")\n\
-        return jsonify({"error": str(e)}), 500\n' >> /app/endpoint.py
+# Configuração do ambiente concluída
 
-# Adicionar o novo endpoint ao app.py
-RUN sed -i '/if __name__ == \'__main__\':/i \# Endpoint para iniciar treinamento\n@app.route("/api/iniciar_treinamento", methods=["POST"])\ndef iniciar_treinamento():\n    """Iniciar o treinamento do modelo de IA"""\n    try:\n        # Iniciar o treinamento em uma thread separada\n        threading.Thread(target=lambda: os.system("python train_model.py"), daemon=True).start()\n        return jsonify({"message": "Treinamento do modelo iniciado com sucesso"}), 200\n    except Exception as e:\n        logger.error(f"Erro ao iniciar treinamento: {str(e)}")\n        return jsonify({"error": str(e)}), 500\n' /app/app.py
+# Comando para iniciar os serviços
 
 # Comando para iniciar os serviços
 CMD ["/bin/bash", "/app/start.sh"]
