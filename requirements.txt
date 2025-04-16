@@ -9,3 +9,8 @@ requests
 python-dotenv
 python-binance
 pymongo
+groq
+asyncio
+tqdm
+matplotlib
+seaborn
