@@ -18,6 +18,14 @@ NEWS_API_KEY=sua_chave_aqui
 APITUBE_API_KEY=sua_chave_aqui
 BINANCE_API_KEY=sua_chave_aqui
 BINANCE_API_SECRET=sua_chave_secreta_aqui
+
+# Configurações do MongoDB
+MONGO_USER=seu_usuario
+MONGO_PASSWORD=sua_senha
+MONGO_HOST=seu_host
+MONGO_PORT=27017
+MONGO_DB=trading_bot
+MONGO_TLS=false
 ```
 
 ### Iniciar o Serviço

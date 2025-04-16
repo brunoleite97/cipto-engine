@@ -1,11 +1,16 @@
 import pandas as pd
 import logging
 import hashlib
+import os
 from datetime import datetime
 from typing import List, Dict
 from logging.handlers import TimedRotatingFileHandler
 from pymongo import MongoClient
 import json
+from dotenv import load_dotenv
+
+# Carregar variáveis de ambiente do arquivo .env
+load_dotenv()
 
 # Configuração aprimorada de logging
 logging.basicConfig(
@@ -20,9 +25,21 @@ logger = logging.getLogger(__name__)
 
 class GerenciadorDeBancoDeDados:
     def __init__(self):
+        # Conectar ao MongoDB usando variáveis de ambiente
+        mongo_user = os.getenv('MONGO_USER', 'bruno')
+        mongo_password = os.getenv('MONGO_PASSWORD', '18fd65f33baff46f91da')
+        mongo_host = os.getenv('MONGO_HOST', 'n8n_bank')
+        mongo_port = os.getenv('MONGO_PORT', '27017')
+        mongo_db = os.getenv('MONGO_DB', 'trading_bot')
+        mongo_tls = os.getenv('MONGO_TLS', 'false')
+        
+        # Construir a string de conexão
+        connection_string = f"mongodb://{mongo_user}:{mongo_password}@{mongo_host}:{mongo_port}/?tls={mongo_tls}"
+        
         # Conectar ao MongoDB
-        self.client = MongoClient("mongodb://bruno:18fd65f33baff46f91da@easypanell.meupcbleite97.shop:27017/?tls=false")
-        self.db = self.client["trading_bot"]
+        self.client = MongoClient(connection_string)
+        self.db = self.client[mongo_db]
+        
         # Criar coleções (equivalente às tabelas no SQLite)
         self.precos = self.db["precos"]
         self.metricas = self.db["metricas"]
