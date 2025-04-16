@@ -15,4 +15,5 @@ services:
       - APITUBE_API_KEY=${APITUBE_API_KEY}
       - BINANCE_API_KEY=${BINANCE_API_KEY}
       - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - GROQ_API_KEY=${GROQ_API_KEY}
     restart: unless-stopped
