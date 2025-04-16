@@ -47,22 +47,27 @@ symbols = [
 class ModeloDeAprendizadoDeMáquina:
     def __init__(self, db: GerenciadorDeBancoDeDados):
         self.db = db
-        self.groq_api_key = os.getenv('GROQ_API_KEY')
-        if not self.groq_api_key:
+        # Não armazenar a chave da API como atributo da classe
+        # Verificar apenas se a variável de ambiente existe
+        if not os.getenv('GROQ_API_KEY'):
             logger.error("GROQ_API_KEY não encontrada nas variáveis de ambiente.")
             raise ValueError("GROQ_API_KEY não configurada. Verifique o arquivo .env")
         logger.info("Inicializado ModeloDeAprendizadoDeMáquina com API Groq.")
 
     def prever_resultado(self, technical_score: float, news_sentiment: float, ai_confidence: float, sma_20: float, sma_50: float, ema_20: float, rsi: float, macd: float, macd_signal: float, macd_diff: float, bb_upper: float, bb_middle: float, bb_lower: float, volume_sma: float, sentiment_notícias: float) -> int:
         """Prever resultado de uma recomendação de negociação usando a API do Groq com fallback para análise baseada em regras"""
-        # Verificar se a chave da API Groq está disponível
-        if not self.groq_api_key:
+        # Verificar se a chave da API Groq está disponível e válida
+        groq_api_key = os.getenv('GROQ_API_KEY')
+        if not groq_api_key:
             logger.warning("GROQ_API_KEY não encontrada. Usando método de fallback para previsão.")
             return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
             
         try:
             import requests
             import json
+            import time
+            from requests.adapters import HTTPAdapter
+            from urllib3.util.retry import Retry
             
             # Preparar os dados para enviar à API do Groq
             dados_mercado = {
@@ -106,14 +111,34 @@ class ModeloDeAprendizadoDeMáquina:
             Baseado nesses dados, responda apenas com o número 1 (comprar) ou 0 (não comprar).
             """
             
-            # Configurar a requisição para a API do Groq
+            # Configurar a requisição para a API do Groq com retry e backoff exponencial
             url = "https://api.groq.com/openai/v1/chat/completions"
+            
+            # Configurar sessão com retry
+            session = requests.Session()
+            retry_strategy = Retry(
+                total=3,  # número máximo de tentativas
+                backoff_factor=1,  # fator de backoff exponencial
+                status_forcelist=[429, 500, 502, 503, 504],  # códigos de status para retry
+                allowed_methods=["POST"]  # métodos permitidos para retry
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            session.mount("https://", adapter)
+            
+            # Obter e verificar a chave da API diretamente da variável de ambiente
+            api_key = os.getenv('GROQ_API_KEY', '').strip()
+            if not api_key.startswith("gsk_"):
+                logger.warning("Formato da chave GROQ_API_KEY parece inválido. Verifique se a chave começa com 'gsk_'.")
+            
+            # Configurar headers com a chave limpa
             headers = {
-                "Authorization": f"Bearer {self.groq_api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             }
+            
+            # Configurar payload
             payload = {
-                "model": "llama3-8b-8192",  # Modelo LLM do Groq
+                "model": "llama-3.3-70b-versatile",  # Modelo LLM do Groq mais avançado
                 "messages": [
                     {"role": "system", "content": "Você é um assistente especializado em análise de mercado de criptomoedas. Responda apenas com 0 ou 1."},
                     {"role": "user", "content": prompt}
@@ -122,9 +147,17 @@ class ModeloDeAprendizadoDeMáquina:
                 "max_tokens": 10  # Resposta curta
             }
             
-            # Fazer a requisição à API do Groq
-            response = requests.post(url, headers=headers, json=payload)
-            response.raise_for_status()  # Verificar se houve erro na requisição
+            # Log detalhado para diagnóstico (sem mostrar partes da chave)
+            logger.info("Enviando requisição para API Groq")
+            
+            # Fazer a requisição à API do Groq com a sessão configurada
+            response = session.post(url, headers=headers, json=payload, timeout=10)
+            
+            # Log detalhado da resposta
+            logger.info(f"Resposta da API Groq - Status: {response.status_code}, Headers: {response.headers}")
+            
+            # Verificar se houve erro na requisição
+            response.raise_for_status()
             
             # Processar a resposta
             result = response.json()
@@ -137,6 +170,35 @@ class ModeloDeAprendizadoDeMáquina:
             else:
                 return 0
                 
+        except requests.exceptions.HTTPError as http_err:
+            status_code = getattr(http_err.response, 'status_code', None)
+            error_detail = ""
+            try:
+                error_json = http_err.response.json()
+                error_detail = f", Detalhes: {error_json}"
+            except:
+                error_detail = f", Resposta: {http_err.response.text if hasattr(http_err.response, 'text') else 'Não disponível'}"
+                
+            logger.error(f"Erro HTTP {status_code} ao acessar API Groq{error_detail}")
+            
+            if status_code == 401 or status_code == 403:
+                logger.error("Erro de autenticação com a API Groq. Verifique se a chave API está correta e ativa.")
+            elif status_code == 429:
+                logger.error("Limite de taxa excedido na API Groq. Aguarde antes de fazer novas solicitações.")
+            
+            logger.info("Usando método de fallback para previsão devido a erro na API Groq.")
+            return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
+            
+        except requests.exceptions.ConnectionError as conn_err:
+            logger.error(f"Erro de conexão com a API Groq: {str(conn_err)}")
+            logger.info("Usando método de fallback para previsão devido a erro na API Groq.")
+            return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
+            
+        except requests.exceptions.Timeout as timeout_err:
+            logger.error(f"Timeout ao conectar com a API Groq: {str(timeout_err)}")
+            logger.info("Usando método de fallback para previsão devido a erro na API Groq.")
+            return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
+            
         except Exception as e:
             logger.error(f"Erro ao prever resultado com API Groq: {str(e)}")
             logger.info("Usando método de fallback para previsão devido a erro na API Groq.")
