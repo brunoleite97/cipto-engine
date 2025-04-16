@@ -47,85 +47,94 @@ symbols = [
 class ModeloDeAprendizadoDeMáquina:
     def __init__(self, db: GerenciadorDeBancoDeDados):
         self.db = db
-        self.model = self._carregar_modelo()
-        self.scaler = self._carregar_scaler()
-        self.modelo_treinado = self.model is not None and self.scaler is not None
-        if not self.modelo_treinado:
-            logger.warning("Modelo ou scaler não encontrados. Inicializando em modo limitado.")
-            # Continuando sem o modelo, permitindo que o serviço inicie para treinamento
-
-    def _carregar_modelo(self):
-        """Carregar o modelo de rede neural a partir de um arquivo PT"""
-        if os.path.exists('model.pt'):
-            try:
-                model = NeuralNetwork()  # Criar uma instância do modelo
-                model.load_state_dict(torch.load('model.pt'))  # Carregar os parâmetros
-                model.eval()  # Colocar o modelo no modo de avaliação
-                logger.info("Modelo carregado com sucesso.")
-                return model
-            except Exception as e:
-                logger.error(f"Erro ao carregar modelo: {str(e)}")
-                return None
-        else:
-            logger.error("Arquivo model.pt não encontrado.")
-            return None
-
-    def _carregar_scaler(self):
-        """Carregar o scaler a partir de arquivos NPY"""
-        if os.path.exists('scaler_mean.npy') and os.path.exists('scaler_scale.npy'):
-            try:
-                scaler = StandardScaler()
-                scaler.mean_ = np.load('scaler_mean.npy')
-                scaler.scale_ = np.load('scaler_scale.npy')
-                scaler.n_features_in_ = 15  # Definir o número de características
-                scaler.feature_names_in_ = np.array([
-                    'technical_score', 'news_sentiment', 'ai_confidence', 'sma_20', 'sma_50', 'ema_20', 'rsi', 'macd', 
-                    'macd_signal', 'macd_diff', 'bb_upper', 'bb_middle', 'bb_lower', 'volume_sma', 'sentiment_notícias'
-                ])
-                logger.info("Scaler carregado com sucesso.")
-                return scaler
-            except FileNotFoundError:
-                logger.error("Scaler não encontrado.")
-                return None
-            except Exception as e:
-                logger.error(f"Erro ao carregar scaler: {str(e)}")
-                return None
-        else:
-            logger.error("Arquivos scaler_mean.npy e scaler_scale.npy não encontrados.")
-            return None
+        self.groq_api_key = os.getenv('GROQ_API_KEY')
+        if not self.groq_api_key:
+            logger.error("GROQ_API_KEY não encontrada nas variáveis de ambiente.")
+            raise ValueError("GROQ_API_KEY não configurada. Verifique o arquivo .env")
+        logger.info("Inicializado ModeloDeAprendizadoDeMáquina com API Groq.")
 
     def prever_resultado(self, technical_score: float, news_sentiment: float, ai_confidence: float, sma_20: float, sma_50: float, ema_20: float, rsi: float, macd: float, macd_signal: float, macd_diff: float, bb_upper: float, bb_middle: float, bb_lower: float, volume_sma: float, sentiment_notícias: float) -> int:
-        """Prever resultado de uma recomendação de negociação"""
+        """Prever resultado de uma recomendação de negociação usando a API do Groq"""
         try:
-            # Se o modelo não estiver treinado, retornar um valor neutro
-            if not self.modelo_treinado:
-                logger.warning("Modelo não treinado. Impossível fazer previsão.")
+            import requests
+            import json
+            
+            # Preparar os dados para enviar à API do Groq
+            dados_mercado = {
+                'technical_score': technical_score,
+                'news_sentiment': news_sentiment,
+                'ai_confidence': ai_confidence,
+                'sma_20': sma_20,
+                'sma_50': sma_50,
+                'ema_20': ema_20,
+                'rsi': rsi,
+                'macd': macd,
+                'macd_signal': macd_signal,
+                'macd_diff': macd_diff,
+                'bb_upper': bb_upper,
+                'bb_middle': bb_middle,
+                'bb_lower': bb_lower,
+                'volume_sma': volume_sma,
+                'sentiment_notícias': sentiment_notícias
+            }
+            
+            # Construir o prompt para a API do Groq
+            prompt = f"""Analise os seguintes dados de mercado de criptomoedas e determine se é recomendável comprar (1) ou não comprar (0):
+            
+            Dados técnicos:
+            - Pontuação técnica: {technical_score}
+            - Sentimento de notícias: {news_sentiment}
+            - Confiança da IA: {ai_confidence}
+            - SMA 20: {sma_20}
+            - SMA 50: {sma_50}
+            - EMA 20: {ema_20}
+            - RSI: {rsi}
+            - MACD: {macd}
+            - Sinal MACD: {macd_signal}
+            - Diferença MACD: {macd_diff}
+            - Banda de Bollinger Superior: {bb_upper}
+            - Banda de Bollinger Média: {bb_middle}
+            - Banda de Bollinger Inferior: {bb_lower}
+            - Volume SMA: {volume_sma}
+            - Sentimento de notícias: {sentiment_notícias}
+            
+            Baseado nesses dados, responda apenas com o número 1 (comprar) ou 0 (não comprar).
+            """
+            
+            # Configurar a requisição para a API do Groq
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.groq_api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "llama3-8b-8192",  # Modelo LLM do Groq
+                "messages": [
+                    {"role": "system", "content": "Você é um assistente especializado em análise de mercado de criptomoedas. Responda apenas com 0 ou 1."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.1,  # Baixa temperatura para respostas mais determinísticas
+                "max_tokens": 10  # Resposta curta
+            }
+            
+            # Fazer a requisição à API do Groq
+            response = requests.post(url, headers=headers, json=payload)
+            response.raise_for_status()  # Verificar se houve erro na requisição
+            
+            # Processar a resposta
+            result = response.json()
+            resposta_texto = result['choices'][0]['message']['content'].strip()
+            logger.info(f"Resposta da API Groq: {resposta_texto}")
+            
+            # Extrair o valor numérico (0 ou 1) da resposta
+            if '1' in resposta_texto:
+                return 1
+            else:
                 return 0
                 
-            features = pd.DataFrame({
-                'technical_score': [technical_score],
-                'news_sentiment': [news_sentiment],
-                'ai_confidence': [ai_confidence],
-                'sma_20': [sma_20],
-                'sma_50': [sma_50],
-                'ema_20': [ema_20],
-                'rsi': [rsi],
-                'macd': [macd],
-                'macd_signal': [macd_signal],
-                'macd_diff': [macd_diff],
-                'bb_upper': [bb_upper],
-                'bb_middle': [bb_middle],
-                'bb_lower': [bb_lower],
-                'volume_sma': [volume_sma],
-                'sentiment_notícias': [sentiment_notícias]
-            })
-            features = self.scaler.transform(features)
-            features = torch.tensor(features, dtype=torch.float32)
-            with torch.no_grad():
-                resultado = (self.model(features) > 0.5).int().item()
-            return resultado
         except Exception as e:
-            logger.error(f"Erro ao prever resultado: {str(e)}")
+            logger.error(f"Erro ao prever resultado com API Groq: {str(e)}")
+            # Em caso de erro, retornar um valor neutro
             return 0
 
 class TradingBot:
@@ -141,7 +150,7 @@ class TradingBot:
         )
         self.sincronizar_tempo()
         self.trading_threads = {}
-        self.última_análise = {symbol: datetime.now() - timedelta(seconds=15) for symbol in symbols}
+        self.última_análise = {symbol: datetime.now() - timedelta(seconds=25) for symbol in symbols}
         self.model = ModeloDeAprendizadoDeMáquina(self.db)
         self.lock = threading.Lock()  # Adicionar um bloqueio para sincronização
 
@@ -163,9 +172,9 @@ class TradingBot:
     def analisar_mercado(self, symbol: str) -> Dict:
         """Análise abrangente do mercado"""
         try:
-            # Verificar se já passou 15 segundos desde a última análise
-            if (datetime.now() - self.última_análise[symbol]).total_seconds() < 15:
-                logger.warning(f"Análise para {symbol} foi feita recentemente. Aguardando 15 segundos...")
+            # Verificar se já passou 25 segundos desde a última análise
+            if (datetime.now() - self.última_análise[symbol]).total_seconds() < 25:
+                logger.warning(f"Análise para {symbol} foi feita recentemente. Aguardando 25 segundos...")
                 return {}
             
             # Adquirir o bloqueio para garantir que nenhuma análise de mercado seja feita durante o treinamento
