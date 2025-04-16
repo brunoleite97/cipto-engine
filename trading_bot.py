@@ -47,20 +47,25 @@ symbols = [
 class ModeloDeAprendizadoDeMáquina:
     def __init__(self, db: GerenciadorDeBancoDeDados):
         self.db = db
-        # Não armazenar a chave da API como atributo da classe
-        # Verificar apenas se a variável de ambiente existe
-        if not os.getenv('GROQ_API_KEY'):
-            logger.error("GROQ_API_KEY não encontrada nas variáveis de ambiente.")
-            raise ValueError("GROQ_API_KEY não configurada. Verifique o arquivo .env")
-        logger.info("Inicializado ModeloDeAprendizadoDeMáquina com API Groq.")
+        # Verificar se a chave da API Groq existe, mas não falhar se não existir
+        self.usar_groq_api = False
+        if os.getenv('GROQ_API_KEY'):
+            self.usar_groq_api = True
+            logger.info("Inicializado ModeloDeAprendizadoDeMáquina com suporte à API Groq.")
+        else:
+            logger.warning("GROQ_API_KEY não encontrada nas variáveis de ambiente. Usando apenas análise técnica.")
+        
+        # Contador de falhas consecutivas da API Groq
+        self.falhas_groq_consecutivas = 0
+        self.max_falhas_permitidas = 5  # Após 5 falhas, desativa temporariamente a API Groq
 
     def prever_resultado(self, technical_score: float, news_sentiment: float, ai_confidence: float, sma_20: float, sma_50: float, ema_20: float, rsi: float, macd: float, macd_signal: float, macd_diff: float, bb_upper: float, bb_middle: float, bb_lower: float, volume_sma: float, sentiment_notícias: float) -> int:
-        """Prever resultado de uma recomendação de negociação usando a API do Groq com fallback para análise baseada em regras"""
-        # Verificar se a chave da API Groq está disponível e válida
-        groq_api_key = os.getenv('GROQ_API_KEY')
-        if not groq_api_key:
-            logger.warning("GROQ_API_KEY não encontrada. Usando método de fallback para previsão.")
-            return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
+        """Prever resultado de uma recomendação de negociação usando análise técnica avançada com opção de API Groq"""
+        # Verificar se devemos usar a API Groq ou ir direto para análise técnica
+        if not self.usar_groq_api or self.falhas_groq_consecutivas >= self.max_falhas_permitidas:
+            if self.falhas_groq_consecutivas >= self.max_falhas_permitidas:
+                logger.warning(f"API Groq temporariamente desativada após {self.falhas_groq_consecutivas} falhas consecutivas.")
+            return self._prever_com_análise_técnica_avançada(technical_score, news_sentiment, rsi, macd, macd_signal, macd_diff, bb_upper, bb_middle, bb_lower, sma_20, sma_50, ema_20, volume_sma)
             
         try:
             import requests
@@ -186,57 +191,138 @@ class ModeloDeAprendizadoDeMáquina:
             elif status_code == 429:
                 logger.error("Limite de taxa excedido na API Groq. Aguarde antes de fazer novas solicitações.")
             
-            logger.info("Usando método de fallback para previsão devido a erro na API Groq.")
-            return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
+            # Incrementar contador de falhas consecutivas
+            self.falhas_groq_consecutivas += 1
+            logger.info(f"Usando análise técnica avançada para previsão devido a erro na API Groq. Falhas consecutivas: {self.falhas_groq_consecutivas}")
+            return self._prever_com_análise_técnica_avançada(technical_score, news_sentiment, rsi, macd, macd_signal, macd_diff, bb_upper, bb_middle, bb_lower, sma_20, sma_50, ema_20, volume_sma)
             
         except requests.exceptions.ConnectionError as conn_err:
             logger.error(f"Erro de conexão com a API Groq: {str(conn_err)}")
-            logger.info("Usando método de fallback para previsão devido a erro na API Groq.")
-            return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
+            # Incrementar contador de falhas consecutivas
+            self.falhas_groq_consecutivas += 1
+            logger.info(f"Usando análise técnica avançada para previsão devido a erro na API Groq. Falhas consecutivas: {self.falhas_groq_consecutivas}")
+            return self._prever_com_análise_técnica_avançada(technical_score, news_sentiment, rsi, macd, macd_signal, macd_diff, bb_upper, bb_middle, bb_lower, sma_20, sma_50, ema_20, volume_sma)
             
         except requests.exceptions.Timeout as timeout_err:
             logger.error(f"Timeout ao conectar com a API Groq: {str(timeout_err)}")
-            logger.info("Usando método de fallback para previsão devido a erro na API Groq.")
-            return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
+            # Incrementar contador de falhas consecutivas
+            self.falhas_groq_consecutivas += 1
+            logger.info(f"Usando análise técnica avançada para previsão devido a erro na API Groq. Falhas consecutivas: {self.falhas_groq_consecutivas}")
+            return self._prever_com_análise_técnica_avançada(technical_score, news_sentiment, rsi, macd, macd_signal, macd_diff, bb_upper, bb_middle, bb_lower, sma_20, sma_50, ema_20, volume_sma)
             
         except Exception as e:
             logger.error(f"Erro ao prever resultado com API Groq: {str(e)}")
-            logger.info("Usando método de fallback para previsão devido a erro na API Groq.")
-            return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
+            # Incrementar contador de falhas consecutivas
+            self.falhas_groq_consecutivas += 1
+            logger.info(f"Usando análise técnica avançada para previsão devido a erro na API Groq. Falhas consecutivas: {self.falhas_groq_consecutivas}")
+            return self._prever_com_análise_técnica_avançada(technical_score, news_sentiment, rsi, macd, macd_signal, macd_diff, bb_upper, bb_middle, bb_lower, sma_20, sma_50, ema_20, volume_sma)
     
-    def _prever_com_regras(self, technical_score: float, rsi: float, macd: float, macd_signal: float, macd_diff: float) -> int:
-        """Método de fallback para previsão baseada em regras quando a API Groq não está disponível"""
-        # Implementação de regras básicas para análise técnica
-        sinais_positivos = 0
+    def _prever_com_análise_técnica_avançada(self, technical_score: float, news_sentiment: float, rsi: float, macd: float, macd_signal: float, macd_diff: float, bb_upper: float, bb_middle: float, bb_lower: float, sma_20: float, sma_50: float, ema_20: float, volume_sma: float) -> int:
+        """Sistema avançado de análise técnica para previsão de negociação"""
+        # Inicializar pontuação ponderada
+        pontuação_total = 0
+        peso_total = 0
         
-        # Verificar pontuação técnica
-        if technical_score > 60:
-            sinais_positivos += 1
+        # === ANÁLISE DE TENDÊNCIA ===
+        # Verificar tendência com médias móveis
+        if sma_20 > sma_50 and sma_20 > 0 and sma_50 > 0:
+            # Tendência de alta: SMA de curto prazo acima da SMA de longo prazo
+            pontuação_total += 2 * 0.15  # Peso 15%
+            logger.debug("Tendência de alta detectada com SMA")
+        elif sma_20 < sma_50 and sma_20 > 0 and sma_50 > 0:
+            # Tendência de baixa
+            pontuação_total -= 2 * 0.15
+            logger.debug("Tendência de baixa detectada com SMA")
+        peso_total += 0.15
         
+        # === ANÁLISE DE MOMENTUM ===
         # Verificar RSI (Índice de Força Relativa)
-        # RSI < 30 indica sobrevendido (potencial de compra)
-        # RSI > 70 indica sobrecomprado (potencial de venda)
         if rsi < 30:
-            sinais_positivos += 1
+            # Sobrevendido - potencial de compra
+            pontuação_total += 3 * 0.2  # Peso 20%
+            logger.debug(f"RSI em condição de sobrevendido: {rsi}")
         elif rsi > 70:
-            sinais_positivos -= 1
+            # Sobrecomprado - potencial de venda
+            pontuação_total -= 3 * 0.2
+            logger.debug(f"RSI em condição de sobrecomprado: {rsi}")
+        elif rsi >= 40 and rsi <= 60:
+            # Zona neutra
+            pontuação_total += 0.5 * 0.2
+            logger.debug(f"RSI em zona neutra: {rsi}")
+        peso_total += 0.2
         
         # Verificar MACD (Moving Average Convergence Divergence)
-        # MACD acima do sinal indica tendência de alta
         if macd > macd_signal:
-            sinais_positivos += 1
+            # MACD acima do sinal indica tendência de alta
+            pontuação_total += 2 * 0.15  # Peso 15%
+            logger.debug(f"MACD acima da linha de sinal: {macd} > {macd_signal}")
         else:
-            sinais_positivos -= 1
-            
+            # MACD abaixo do sinal indica tendência de baixa
+            pontuação_total -= 2 * 0.15
+            logger.debug(f"MACD abaixo da linha de sinal: {macd} < {macd_signal}")
+        
         # Verificar diferença do MACD
-        # Diferença positiva e crescente indica força na tendência de alta
-        if macd_diff > 0:
-            sinais_positivos += 1
+        if macd_diff > 0 and macd_diff > macd_diff * 0.05:  # Diferença significativa
+            pontuação_total += 1 * 0.1  # Peso 10%
+            logger.debug(f"Diferença MACD positiva: {macd_diff}")
+        elif macd_diff < 0 and macd_diff < macd_diff * -0.05:  # Diferença significativa negativa
+            pontuação_total -= 1 * 0.1
+            logger.debug(f"Diferença MACD negativa: {macd_diff}")
+        peso_total += 0.25
         
-        logger.info(f"Análise de fallback: {sinais_positivos} sinais positivos encontrados")
+        # === ANÁLISE DE VOLATILIDADE ===
+        # Verificar Bandas de Bollinger
+        if bb_upper > 0 and bb_lower > 0 and bb_middle > 0:
+            current_price = bb_middle  # Usar preço médio como aproximação
+            banda_superior_dist = (bb_upper - current_price) / current_price
+            banda_inferior_dist = (current_price - bb_lower) / current_price
+            
+            if banda_inferior_dist < 0.01:  # Preço próximo à banda inferior
+                pontuação_total += 2 * 0.15  # Peso 15%
+                logger.debug("Preço próximo à banda inferior de Bollinger - potencial de compra")
+            elif banda_superior_dist < 0.01:  # Preço próximo à banda superior
+                pontuação_total -= 2 * 0.15
+                logger.debug("Preço próximo à banda superior de Bollinger - potencial de venda")
+        peso_total += 0.15
         
-        # Decisão final baseada na contagem de sinais positivos
-        return 1 if sinais_positivos > 1 else 0
+        # === ANÁLISE DE VOLUME ===
+        # Verificar volume em relação à média
+        if volume_sma > 0:
+            pontuação_total += 1 * 0.1  # Peso 10%
+            logger.debug(f"Volume acima da média: {volume_sma}")
+        peso_total += 0.1
+        
+        # === ANÁLISE DE SENTIMENTO ===
+        # Incorporar sentimento de notícias
+        if news_sentiment > 0.6:
+            pontuação_total += 2 * 0.15  # Peso 15%
+            logger.debug(f"Sentimento de notícias positivo: {news_sentiment}")
+        elif news_sentiment < 0.4 and news_sentiment > 0:
+            pontuação_total -= 2 * 0.15
+            logger.debug(f"Sentimento de notícias negativo: {news_sentiment}")
+        peso_total += 0.15
+        
+        # Normalizar pontuação final (entre -1 e 1)
+        if peso_total > 0:
+            pontuação_normalizada = pontuação_total / peso_total
+        else:
+            pontuação_normalizada = 0
+        
+        # Converter para escala de 0 a 100
+        pontuação_percentual = (pontuação_normalizada + 1) * 50
+        
+        # Registrar resultado da análise
+        logger.info(f"Análise técnica avançada: pontuação {pontuação_percentual:.2f}/100")
+        
+        # Decisão final baseada na pontuação percentual
+        # Usar um limiar mais conservador (60%) para recomendar compra
+        return 1 if pontuação_percentual >= 60 else 0
+        
+    def _prever_com_regras(self, technical_score: float, rsi: float, macd: float, macd_signal: float, macd_diff: float) -> int:
+        """Método legado de fallback para compatibilidade"""
+        # Redirecionar para o novo método de análise técnica avançada
+        logger.warning("Método _prever_com_regras está obsoleto. Usando análise técnica avançada.")
+        return self._prever_com_análise_técnica_avançada(technical_score, 0.5, rsi, macd, macd_signal, macd_diff, 0, 0, 0, 0, 0, 0, 0)
 
 class TradingBot:
     def __init__(self, symbols: List[str]):
