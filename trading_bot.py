@@ -54,7 +54,12 @@ class ModeloDeAprendizadoDeMáquina:
         logger.info("Inicializado ModeloDeAprendizadoDeMáquina com API Groq.")
 
     def prever_resultado(self, technical_score: float, news_sentiment: float, ai_confidence: float, sma_20: float, sma_50: float, ema_20: float, rsi: float, macd: float, macd_signal: float, macd_diff: float, bb_upper: float, bb_middle: float, bb_lower: float, volume_sma: float, sentiment_notícias: float) -> int:
-        """Prever resultado de uma recomendação de negociação usando a API do Groq"""
+        """Prever resultado de uma recomendação de negociação usando a API do Groq com fallback para análise baseada em regras"""
+        # Verificar se a chave da API Groq está disponível
+        if not self.groq_api_key:
+            logger.warning("GROQ_API_KEY não encontrada. Usando método de fallback para previsão.")
+            return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
+            
         try:
             import requests
             import json
@@ -134,8 +139,42 @@ class ModeloDeAprendizadoDeMáquina:
                 
         except Exception as e:
             logger.error(f"Erro ao prever resultado com API Groq: {str(e)}")
-            # Em caso de erro, retornar um valor neutro
-            return 0
+            logger.info("Usando método de fallback para previsão devido a erro na API Groq.")
+            return self._prever_com_regras(technical_score, rsi, macd, macd_signal, macd_diff)
+    
+    def _prever_com_regras(self, technical_score: float, rsi: float, macd: float, macd_signal: float, macd_diff: float) -> int:
+        """Método de fallback para previsão baseada em regras quando a API Groq não está disponível"""
+        # Implementação de regras básicas para análise técnica
+        sinais_positivos = 0
+        
+        # Verificar pontuação técnica
+        if technical_score > 60:
+            sinais_positivos += 1
+        
+        # Verificar RSI (Índice de Força Relativa)
+        # RSI < 30 indica sobrevendido (potencial de compra)
+        # RSI > 70 indica sobrecomprado (potencial de venda)
+        if rsi < 30:
+            sinais_positivos += 1
+        elif rsi > 70:
+            sinais_positivos -= 1
+        
+        # Verificar MACD (Moving Average Convergence Divergence)
+        # MACD acima do sinal indica tendência de alta
+        if macd > macd_signal:
+            sinais_positivos += 1
+        else:
+            sinais_positivos -= 1
+            
+        # Verificar diferença do MACD
+        # Diferença positiva e crescente indica força na tendência de alta
+        if macd_diff > 0:
+            sinais_positivos += 1
+        
+        logger.info(f"Análise de fallback: {sinais_positivos} sinais positivos encontrados")
+        
+        # Decisão final baseada na contagem de sinais positivos
+        return 1 if sinais_positivos > 1 else 0
 
 class TradingBot:
     def __init__(self, symbols: List[str]):
