@@ -1,10 +1,11 @@
-import sqlite3
 import pandas as pd
 import logging
 import hashlib
 from datetime import datetime
 from typing import List, Dict
 from logging.handlers import TimedRotatingFileHandler
+from pymongo import MongoClient
+import json
 
 # Configuração aprimorada de logging
 logging.basicConfig(
@@ -19,108 +20,69 @@ logger = logging.getLogger(__name__)
 
 class GerenciadorDeBancoDeDados:
     def __init__(self):
-        self.con = sqlite3.connect('trading_bot.db', check_same_thread=False)
-        self._criar_tabelas()
+        # Conectar ao MongoDB
+        self.client = MongoClient("mongodb://bruno:18fd65f33baff46f91da@easypanell.meupcbleite97.shop:27017/?tls=false")
+        self.db = self.client["trading_bot"]
+        # Criar coleções (equivalente às tabelas no SQLite)
+        self.precos = self.db["precos"]
+        self.metricas = self.db["metricas"]
+        self.noticias = self.db["noticias"]
+        self.recomendacoes = self.db["recomendacoes"]
+        self.negociacoes = self.db["negociacoes"]
 
     def _criar_tabelas(self):
-        """Criar tabelas no banco de dados SQLite"""
+        """Criar índices nas coleções do MongoDB"""
         try:
-            with self.con:
-                self.con.execute('''
-                    CREATE TABLE IF NOT EXISTS preços (
-                        timestamp DATETIME,
-                        symbol TEXT,
-                        open REAL,
-                        high REAL,
-                        low REAL,
-                        close REAL,
-                        volume REAL,
-                        PRIMARY KEY (timestamp, symbol)
-                    )
-                ''')
-                self.con.execute('''
-                    CREATE TABLE IF NOT EXISTS métricas (
-                        timestamp DATETIME,
-                        symbol TEXT,
-                        sma_20 REAL,
-                        sma_50 REAL,
-                        ema_20 REAL,
-                        rsi REAL,
-                        macd REAL,
-                        macd_signal REAL,
-                        macd_diff REAL,
-                        bb_upper REAL,
-                        bb_middle REAL,
-                        bb_lower REAL,
-                        volume_sma REAL,
-                        PRIMARY KEY (timestamp, symbol)
-                    )
-                ''')
-                self.con.execute('''
-                    CREATE TABLE IF NOT EXISTS notícias (
-                        hash TEXT PRIMARY KEY,
-                        symbol TEXT,
-                        title TEXT,
-                        description TEXT,
-                        url TEXT,
-                        timestamp DATETIME,
-                        sentiment REAL
-                    )
-                ''')
-                self.con.execute('''
-                    CREATE TABLE IF NOT EXISTS recomendações (
-                        timestamp DATETIME,
-                        symbol TEXT,
-                        recomendação TEXT,
-                        confiança REAL,
-                        nível_de_risco TEXT,
-                        razão TEXT,
-                        PRIMARY KEY (timestamp, symbol)
-                    )
-                ''')
-                self.con.execute('''
-                    CREATE TABLE IF NOT EXISTS negociações (
-                        timestamp DATETIME,
-                        symbol TEXT,
-                        side TEXT,
-                        quantity REAL,
-                        price REAL,
-                        total_value REAL,
-                        ai_confidence REAL,
-                        technical_score REAL,
-                        news_sentiment REAL,
-                        status TEXT,
-                        profit REAL,
-                        PRIMARY KEY (timestamp, symbol)
-                    )
-                ''')
+            # Criar índices compostos para as coleções
+            self.precos.create_index([('timestamp', 1), ('symbol', 1)], unique=True)
+            self.metricas.create_index([('timestamp', 1), ('symbol', 1)], unique=True)
+            self.noticias.create_index('hash', unique=True)
+            self.recomendacoes.create_index([('timestamp', 1), ('symbol', 1)], unique=True)
+            self.negociacoes.create_index([('timestamp', 1), ('symbol', 1)], unique=True)
+            logger.info("Índices criados com sucesso no MongoDB")
         except Exception as e:
-            logger.error(f"Erro ao criar tabelas: {str(e)}")
+            logger.error(f"Erro ao criar índices no MongoDB: {str(e)}")
             raise
 
     def armazenar_dados_de_preco(self, df_preços: pd.DataFrame, symbol: str):
-        """Armazenar dados de preços no banco de dados"""
+        """Armazenar dados de preços no MongoDB"""
         try:
-            df_preços.to_sql('preços', self.con, if_exists='append', index=False)
+            # Converter DataFrame para lista de dicionários
+            registros = json.loads(df_preços.to_json(orient='records'))
+            # Inserir registros no MongoDB com upsert para evitar duplicatas
+            for registro in registros:
+                # Garantir que timestamp seja um objeto datetime
+                if 'timestamp' in registro and isinstance(registro['timestamp'], str):
+                    registro['timestamp'] = datetime.fromisoformat(registro['timestamp'].replace('Z', '+00:00'))
+                # Definir critério de busca para upsert
+                filtro = {'timestamp': registro['timestamp'], 'symbol': symbol}
+                # Inserir ou atualizar documento
+                self.precos.update_one(filtro, {'$set': registro}, upsert=True)
             logger.info(f"Dados de preços armazenados com sucesso para {symbol}")
         except Exception as e:
             logger.error(f"Erro ao armazenar dados de preços: {str(e)}")
             raise
 
     def armazenar_metricas(self, metricas: Dict, symbol: str):
-        """Armazenar indicadores técnicos no banco de dados"""
+        """Armazenar indicadores técnicos no MongoDB"""
         try:
-            df_metricas = pd.DataFrame([metricas])
-            df_metricas.to_sql('métricas', self.con, if_exists='append', index=False)
+            # Adicionar o símbolo ao dicionário de métricas
+            metricas['symbol'] = symbol
+            # Garantir que timestamp seja um objeto datetime
+            if 'timestamp' in metricas and isinstance(metricas['timestamp'], str):
+                metricas['timestamp'] = datetime.fromisoformat(metricas['timestamp'].replace('Z', '+00:00'))
+            # Definir critério de busca para upsert
+            filtro = {'timestamp': metricas['timestamp'], 'symbol': symbol}
+            # Inserir ou atualizar documento
+            self.metricas.update_one(filtro, {'$set': metricas}, upsert=True)
             logger.info(f"Indicadores técnicos armazenados com sucesso para {symbol}")
         except Exception as e:
             logger.error(f"Erro ao armazenar indicadores técnicos: {str(e)}")
             raise
 
     def armazenar_notícias(self, notícias: List[Dict], symbol: str):
-        """Armazenar notícias no banco de dados"""
+        """Armazenar notícias no MongoDB"""
         try:
-            notícias_com_hash = []
             for noticia in notícias:
                 # Garantir que a coluna 'timestamp' esteja presente e convertida corretamente
                 if 'publishedAt' in noticia:
@@ -130,7 +92,9 @@ class GerenciadorDeBancoDeDados:
                 
                 # Gerar hash único para cada notícia
                 hash_notícia = hashlib.md5(f"{noticia['title']} {noticia['description']} {noticia['url']} {timestamp}".encode()).hexdigest()
-                notícias_com_hash.append({
+                
+                # Preparar documento para MongoDB
+                documento = {
                     'hash': hash_notícia,
                     'symbol': symbol,
                     'title': noticia['title'],
@@ -138,101 +102,181 @@ class GerenciadorDeBancoDeDados:
                     'url': noticia['url'],
                     'timestamp': timestamp,
                     'sentiment': noticia['sentiment']
-                })
+                }
+                
+                # Inserir ou atualizar documento
+                self.noticias.update_one({'hash': hash_notícia}, {'$set': documento}, upsert=True)
             
-            df_notícias = pd.DataFrame(notícias_com_hash)
-            df_notícias.to_sql('notícias', self.con, if_exists='append', index=False)
             logger.info(f"Notícias armazenadas com sucesso para {symbol}")
-        except sqlite3.IntegrityError as e:
-            logger.warning(f"Notícia já existente para {symbol}: {str(e)}")
         except Exception as e:
-            logger.error(f"Erro ao armazenar notícias: {str(e)}")
-            raise
+            if "duplicate key" in str(e):
+                logger.warning(f"Notícia já existente para {symbol}: {str(e)}")
+            else:
+                logger.error(f"Erro ao armazenar notícias: {str(e)}")
+                raise
 
     def armazenar_recomendação(self, recomendação: Dict, symbol: str):
-        """Armazenar recomendação no banco de dados"""
+        """Armazenar recomendação no MongoDB"""
         try:
-            df_recomendação = pd.DataFrame([recomendação])
-            df_recomendação.to_sql('recomendações', self.con, if_exists='append', index=False)
+            # Adicionar o símbolo ao dicionário de recomendação
+            recomendação['symbol'] = symbol
+            # Garantir que timestamp seja um objeto datetime
+            if 'timestamp' in recomendação and isinstance(recomendação['timestamp'], str):
+                recomendação['timestamp'] = datetime.fromisoformat(recomendação['timestamp'].replace('Z', '+00:00'))
+            # Definir critério de busca para upsert
+            filtro = {'timestamp': recomendação['timestamp'], 'symbol': symbol}
+            # Inserir ou atualizar documento
+            self.recomendacoes.update_one(filtro, {'$set': recomendação}, upsert=True)
             logger.info(f"Recomendação armazenada com sucesso para {symbol}")
         except Exception as e:
             logger.error(f"Erro ao armazenar recomendação: {str(e)}")
             raise
 
     def armazenar_negociação(self, dados_de_negociação: Dict):
-        """Armazenar detalhes da negociação no banco de dados"""
+        """Armazenar detalhes da negociação no MongoDB"""
         try:
             # Calcular lucro
             dados_de_negociação['profit'] = dados_de_negociação['total_value'] - (dados_de_negociação['quantity'] * dados_de_negociação['price'])
             
-            df_negociação = pd.DataFrame([dados_de_negociação])
-            df_negociação.to_sql('negociações', self.con, if_exists='append', index=False)
+            # Garantir que timestamp seja um objeto datetime
+            if 'timestamp' in dados_de_negociação and isinstance(dados_de_negociação['timestamp'], str):
+                dados_de_negociação['timestamp'] = datetime.fromisoformat(dados_de_negociação['timestamp'].replace('Z', '+00:00'))
+            
+            # Definir critério de busca para upsert
+            filtro = {'timestamp': dados_de_negociação['timestamp'], 'symbol': dados_de_negociação['symbol']}
+            # Inserir ou atualizar documento
+            self.negociacoes.update_one(filtro, {'$set': dados_de_negociação}, upsert=True)
             logger.info(f"Negociação armazenada com sucesso")
         except Exception as e:
             logger.error(f"Erro ao armazenar negociação: {str(e)}")
             raise
 
     def obter_negociações(self) -> pd.DataFrame:
-        """Obter dados de negociações do banco de dados"""
+        """Obter dados de negociações do MongoDB"""
         try:
-            query = 'SELECT * FROM negociações'
-            logger.info(f"Executando consulta SQL: {query}")
-            df_negociações = pd.read_sql_query(query, self.con)
-            return df_negociações
+            logger.info("Obtendo todas as negociações do MongoDB")
+            # Buscar todos os documentos da coleção de negociações
+            documentos = list(self.negociacoes.find({}))
+            # Converter para DataFrame
+            if documentos:
+                df_negociações = pd.DataFrame(documentos)
+                # Remover o campo _id gerado pelo MongoDB
+                if '_id' in df_negociações.columns:
+                    df_negociações = df_negociações.drop('_id', axis=1)
+                return df_negociações
+            else:
+                return pd.DataFrame()
         except Exception as e:
             logger.error(f"Erro ao obter negociações: {str(e)}")
             raise
 
     def obter_notícias(self) -> pd.DataFrame:
-        """Obter dados de notícias do banco de dados"""
+        """Obter dados de notícias do MongoDB"""
         try:
-            query = 'SELECT * FROM notícias'
-            logger.info(f"Executando consulta SQL: {query}")
-            df_notícias = pd.read_sql_query(query, self.con)
-            return df_notícias
+            logger.info("Obtendo todas as notícias do MongoDB")
+            # Buscar todos os documentos da coleção de notícias
+            documentos = list(self.noticias.find({}))
+            # Converter para DataFrame
+            if documentos:
+                df_notícias = pd.DataFrame(documentos)
+                # Remover o campo _id gerado pelo MongoDB
+                if '_id' in df_notícias.columns:
+                    df_notícias = df_notícias.drop('_id', axis=1)
+                return df_notícias
+            else:
+                return pd.DataFrame()
         except Exception as e:
             logger.error(f"Erro ao obter notícias: {str(e)}")
             raise
 
     def obter_métricas(self) -> pd.DataFrame:
-        """Obter indicadores técnicos do banco de dados"""
+        """Obter indicadores técnicos do MongoDB"""
         try:
-            query = 'SELECT * FROM métricas'
-            logger.info(f"Executando consulta SQL: {query}")
-            df_métricas = pd.read_sql_query(query, self.con)
-            return df_métricas
+            logger.info("Obtendo todas as métricas do MongoDB")
+            # Buscar todos os documentos da coleção de métricas
+            documentos = list(self.metricas.find({}))
+            # Converter para DataFrame
+            if documentos:
+                df_métricas = pd.DataFrame(documentos)
+                # Remover o campo _id gerado pelo MongoDB
+                if '_id' in df_métricas.columns:
+                    df_métricas = df_métricas.drop('_id', axis=1)
+                return df_métricas
+            else:
+                return pd.DataFrame()
         except Exception as e:
             logger.error(f"Erro ao obter métricas: {str(e)}")
             raise
 
     def obter_preços(self) -> pd.DataFrame:
-        """Obter dados de preços do banco de dados"""
+        """Obter dados de preços do MongoDB"""
         try:
-            query = 'SELECT * FROM preços'
-            logger.info(f"Executando consulta SQL: {query}")
-            df_preços = pd.read_sql_query(query, self.con)
-            return df_preços
+            logger.info("Obtendo todos os preços do MongoDB")
+            # Buscar todos os documentos da coleção de preços
+            documentos = list(self.precos.find({}))
+            # Converter para DataFrame
+            if documentos:
+                df_preços = pd.DataFrame(documentos)
+                # Remover o campo _id gerado pelo MongoDB
+                if '_id' in df_preços.columns:
+                    df_preços = df_preços.drop('_id', axis=1)
+                return df_preços
+            else:
+                return pd.DataFrame()
         except Exception as e:
             logger.error(f"Erro ao obter preços: {str(e)}")
             raise
 
     def obter_preços_passados(self, symbol: str, intervalo: str = '1d', periodo: str = '1 week ago UTC') -> pd.DataFrame:
-        """Obter dados de preços passados do banco de dados"""
+        """Obter dados de preços passados do MongoDB"""
         try:
-            query = f"SELECT * FROM preços WHERE symbol = ? AND timestamp >= ?"
-            logger.info(f"Executando consulta SQL: {query}")
-            df_preços = pd.read_sql_query(query, self.con, params=(symbol, periodo))
-            return df_preços
+            # Converter periodo para datetime
+            data_limite = pd.to_datetime(periodo)
+            logger.info(f"Obtendo preços passados para {symbol} desde {data_limite}")
+            
+            # Buscar documentos que correspondem aos critérios
+            filtro = {
+                'symbol': symbol,
+                'timestamp': {'$gte': data_limite}
+            }
+            documentos = list(self.precos.find(filtro).sort('timestamp', 1))
+            
+            # Converter para DataFrame
+            if documentos:
+                df_preços = pd.DataFrame(documentos)
+                # Remover o campo _id gerado pelo MongoDB
+                if '_id' in df_preços.columns:
+                    df_preços = df_preços.drop('_id', axis=1)
+                return df_preços
+            else:
+                return pd.DataFrame()
         except Exception as e:
             logger.error(f"Erro ao obter preços passados: {str(e)}")
             raise
 
-    def contar_registros(self, tabela: str) -> int:
-        """Contar o número de registros em uma tabela específica"""
+    def contar_registros(self, colecao: str) -> int:
+        """Contar o número de registros em uma coleção específica"""
         try:
-            with self.con:
-                count = self.con.execute(f'SELECT COUNT(*) FROM {tabela}').fetchone()[0]
+            # Mapear nome da coleção para o atributo correspondente
+            mapeamento_colecoes = {
+                'preços': self.precos,
+                'precos': self.precos,
+                'métricas': self.metricas,
+                'metricas': self.metricas,
+                'notícias': self.noticias,
+                'noticias': self.noticias,
+                'recomendações': self.recomendacoes,
+                'recomendacoes': self.recomendacoes,
+                'negociações': self.negociacoes,
+                'negociacoes': self.negociacoes
+            }
+            
+            if colecao in mapeamento_colecoes:
+                count = mapeamento_colecoes[colecao].count_documents({})
                 return count
+            else:
+                logger.error(f"Coleção {colecao} não encontrada")
+                return 0
         except Exception as e:
-            logger.error(f"Erro ao contar registros na tabela {tabela}: {str(e)}")
+            logger.error(f"Erro ao contar registros na coleção {colecao}: {str(e)}")
             raise

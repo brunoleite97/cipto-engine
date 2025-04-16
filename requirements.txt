@@ -8,3 +8,4 @@ ta
 requests
 python-dotenv
 python-binance
+pymongo
